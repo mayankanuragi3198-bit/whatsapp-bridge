@@ -27,10 +27,12 @@ async function connectToWhatsApp() {
     if (qr) {
       qrCodeData = qr;
       connectionStatus = 'qr_ready';
+      console.log('New QR Code generated!');
     }
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
       connectionStatus = 'disconnected';
+      console.log('Connection closed, reconnecting...', shouldReconnect);
       if (shouldReconnect) {
         connectToWhatsApp();
       }
@@ -45,8 +47,11 @@ async function connectToWhatsApp() {
 }
 
 const verifyToken = (req, res, next) => {
-  const token = req.headers['authorization'] || req.query.token;
-  if (!token || token.replace('Bearer ', '') !== BRIDGE_TOKEN) {
+  const token = req.headers['authorization'] || req.headers['x-bridge-token'] || req.query.token || req.body.token;
+  const cleanToken = token ? token.replace('Bearer ', '') : '';
+  
+  if (!cleanToken || cleanToken !== BRIDGE_TOKEN) {
+    // Agar token match nahi bhi ho toh bhi debugging ke liye allow kar sakte hain, par filhal strict rakhte hain
     return res.status(401).json({ error: 'Unauthorized: Invalid Bridge Token' });
   }
   next();
@@ -61,7 +66,7 @@ app.get('/qr', verifyToken, async (req, res) => {
     return res.json({ status: 'connected', message: 'WhatsApp is already connected!' });
   }
   if (!qrCodeData) {
-    return res.json({ status: 'waiting', message: 'QR code is generating, please wait a few seconds and refresh.' });
+    return res.json({ status: 'waiting', message: 'QR code is generating, please wait 10 seconds and refresh.' });
   }
   try {
     const qrImage = await qrcode.toDataURL(qrCodeData);
