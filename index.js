@@ -10,36 +10,36 @@ const PORT = process.env.PORT || 3000;
 const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || 'secret123';
 
 let sock = null;
-let qrCodeData = '';
+let currentQR = '';
 let connectionStatus = 'disconnected';
 
-async function connectToWhatsApp() {
+async function startWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-  
+
   sock = makeWASocket({
     auth: state,
-    printQRInTerminal: true,
-    logger: pino({ level: 'silent' })
+    printQRInTerminal: false,
+    logger: pino({ level: 'silent' }),
+    browser: ["Chrome", "Desktop", "10.0"]
   });
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
-      qrCodeData = qr;
+      currentQR = qr;
       connectionStatus = 'qr_ready';
-      console.log('New QR Code generated!');
     }
     if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       connectionStatus = 'disconnected';
-      console.log('Connection closed, reconnecting...', shouldReconnect);
+      currentQR = '';
       if (shouldReconnect) {
-        connectToWhatsApp();
+        setTimeout(startWhatsApp, 3000);
       }
     } else if (connection === 'open') {
       connectionStatus = 'connected';
-      qrCodeData = '';
-      console.log('WhatsApp connected successfully!');
+      currentQR = '';
     }
   });
 
@@ -47,12 +47,10 @@ async function connectToWhatsApp() {
 }
 
 const verifyToken = (req, res, next) => {
-  const token = req.headers['authorization'] || req.headers['x-bridge-token'] || req.query.token || req.body.token;
+  const token = req.headers['authorization'] || req.headers['x-bridge-token'] || req.query.token || req.body?.token;
   const cleanToken = token ? token.replace('Bearer ', '') : '';
-  
   if (!cleanToken || cleanToken !== BRIDGE_TOKEN) {
-    // Agar token match nahi bhi ho toh bhi debugging ke liye allow kar sakte hain, par filhal strict rakhte hain
-    return res.status(401).json({ error: 'Unauthorized: Invalid Bridge Token' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
   next();
 };
@@ -63,37 +61,19 @@ app.get('/', (req, res) => {
 
 app.get('/qr', verifyToken, async (req, res) => {
   if (connectionStatus === 'connected') {
-    return res.json({ status: 'connected', message: 'WhatsApp is already connected!' });
+    return res.json({ status: 'connected', message: 'Already connected' });
   }
-  if (!qrCodeData) {
-    return res.json({ status: 'waiting', message: 'QR code is generating, please wait 10 seconds and refresh.' });
+  if (!currentQR) {
+    return res.json({ status: 'waiting', message: 'QR generating, please wait 5 seconds and retry.' });
   }
   try {
-    const qrImage = await qrcode.toDataURL(qrCodeData);
+    const qrImage = await qrcode.toDataURL(currentQR);
     res.json({ status: 'qr_ready', qr: qrImage });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to generate QR code image' });
-  }
-});
-
-app.post('/send', verifyToken, async (req, res) => {
-  const { phone, message } = req.body;
-  if (!phone || !message) {
-    return res.status(400).json({ error: 'Phone and message are required' });
-  }
-  if (!sock || connectionStatus !== 'connected') {
-    return res.status(400).json({ error: 'WhatsApp is not connected yet.' });
-  }
-  try {
-    const chatId = phone.includes('@s.whatsapp.net') ? phone : `${phone}@s.whatsapp.net`;
-    await sock.sendMessage(chatId, { text: message });
-    res.json({ success: true, message: 'Message sent successfully!' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (e) {
+    res.status(500).json({ error: 'QR conversion failed' });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`WhatsApp Bridge running on port ${PORT}`);
-  connectToWhatsApp();
+  startWhatsApp();
 });
